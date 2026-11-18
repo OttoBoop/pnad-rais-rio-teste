@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>teste de leitura parcial</title>
+<pre id="saida">carregando…</pre>
+<script type="module">
+const p = new URLSearchParams(location.search);
+const versao = p.get('v') || '1.29.0';
+const urls = p.getAll('url');
+const contorno = p.get('contorno') === '1';
+const out = document.getElementById('saida');
+const resultado = { versao, contorno, testes: [] };
+try {
+  const duckdb = await import(`https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${versao}/+esm`);
+  const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+  const wurl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
+  const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), new Worker(wurl));
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  const conn = await db.connect();
+  if (contorno) {
+    try { await conn.query('SET builtin_httpfs=false'); await conn.query('LOAD httpfs'); resultado.contorno_ok = true; }
+    catch (e) { resultado.contorno_ok = String(e); }
+  }
+  for (const url of urls) {
+    const t = { url };
+    const t0 = performance.now();
+    try {
+      const n = await conn.query(`SELECT count(*)::INT AS n FROM read_parquet('${url}')`);
+      t.linhas = n.toArray()[0].n;
+      t.ms_contagem = Math.round(performance.now() - t0);
+      const t1 = performance.now();
+      const modelo = p.get('sql') || "SELECT VD4002::INT AS vd4002, round(sum(V1028))::BIGINT AS pop FROM {tab} GROUP BY 1 ORDER BY 1";
+      const r = await conn.query(modelo.replaceAll('{tab}', `read_parquet('${url}')`));
+      t.agregado = r.toArray().slice(0, 20).map(x => Object.values(x.toJSON()).map(v => typeof v === 'bigint' ? Number(v) : v));
+      t.ms_agregado = Math.round(performance.now() - t1);
+    } catch (e) { t.erro = String(e).slice(0, 300); }
+    resultado.testes.push(t);
+  }
+} catch (e) { resultado.erro_geral = String(e).slice(0, 500); }
+out.textContent = JSON.stringify(resultado, null, 1);
+window.__resultado = resultado;
+</script>
